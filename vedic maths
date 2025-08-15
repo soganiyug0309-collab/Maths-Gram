@@ -1,0 +1,459 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Play, LogIn, Home, Phone, Info, GraduationCap, Award } from "lucide-react";
+
+// --- Minimal shadcn/ui stand-ins (kept inline for preview friendliness) ---
+// If your environment already has shadcn/ui, replace these with actual imports.
+// import { Button } from "@/components/ui/button"; etc.
+const Button = ({ className = "", children, ...props }) => (
+  <button
+    className={`px-4 py-2 rounded-2xl shadow transition hover:shadow-md active:scale-[0.98] bg-black text-white disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+    {...props}
+  >
+    {children}
+  </button>
+);
+const Card = ({ className = "", children }) => (
+  <div className={`rounded-2xl shadow p-5 bg-white ${className}`}>{children}</div>
+);
+const Field = ({ label, children }) => (
+  <label className="block mb-3"> 
+    <span className="block text-sm font-medium text-neutral-700 mb-1">{label}</span>
+    {children}
+  </label>
+);
+
+// Utility: random helpers
+const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
+
+// "AI" question generator — medium-level math
+function generateQuestion() {
+  const types = ["algebra", "percent", "arithmetic", "lcmgcd", "exponent", "fraction"]; // diversify
+  const t = types[randInt(0, types.length - 1)];
+
+  // Return shape: { text, answer, choices? (optional), explain }
+  switch (t) {
+    case "algebra": {
+      // Solve ax + b = c
+      const a = randInt(2, 12);
+      const x = randInt(-9, 9);
+      const b = randInt(-20, 20);
+      const c = a * x + b;
+      const text = `Solve for x: ${a}x + ${b} = ${c}`;
+      const answer = x;
+      // create MC choices near answer
+      const choices = shuffle([x, x + randInt(1, 3), x - randInt(1, 3), x + randInt(4, 7)]);
+      return { text, answer: String(answer), choices: choices.map(String), explain: `Rearrange: ${a}x = ${c - b} ⇒ x = ${(c - b)}/${a} = ${x}.` };
+    }
+    case "percent": {
+      // Find % of a number
+      const p = [10, 12.5, 15, 20, 25, 30, 35, 40, 50][randInt(0, 8)];
+      const base = randInt(40, 240);
+      const ans = +(base * (p / 100)).toFixed(2);
+      const text = `What is ${p}% of ${base}?`;
+      const choices = shuffle([ans, +(ans * 0.9).toFixed(2), +(ans * 1.1).toFixed(2), +(ans + randInt(1, 10)).toFixed(2)]);
+      return { text, answer: String(ans), choices: choices.map(String), explain: `${p}% = ${p/100}. ${base}×${p/100} = ${ans}.` };
+    }
+    case "arithmetic": {
+      // Mixed operations
+      const a = randInt(10, 60);
+      const b = randInt(5, 40);
+      const c = randInt(2, 12);
+      const text = `Evaluate: (${a} + ${b}) × ${c}`;
+      const ans = (a + b) * c;
+      const choices = shuffle([ans, ans + c, ans - c, ans + 2 * c]);
+      return { text, answer: String(ans), choices: choices.map(String), explain: `${a}+${b}=${a + b}; (${a + b})×${c}=${ans}.` };
+    }
+    case "lcmgcd": {
+      // LCM of two numbers
+      const a = randInt(6, 18);
+      const b = randInt(8, 20);
+      const gcd = (x, y) => (y === 0 ? x : gcd(y, x % y));
+      const g = gcd(a, b);
+      const l = (a * b) / g;
+      const text = `Find LCM(${a}, ${b}).`;
+      const choices = shuffle([l, l + a, l + b, l - g]);
+      return { text, answer: String(l), choices: choices.map(String), explain: `LCM = (a×b)/gcd = (${a}×${b})/${g} = ${l}.` };
+    }
+    case "exponent": {
+      const a = randInt(2, 9);
+      const e = randInt(2, 4);
+      const text = `Compute: ${a}^${e}`;
+      const ans = Math.pow(a, e);
+      const choices = shuffle([ans, ans + a, ans - a, ans + 2 * a]);
+      return { text, answer: String(ans), choices: choices.map(String), explain: `${a}^${e} = ${Array(e).fill(a).join("×")} = ${ans}.` };
+    }
+    case "fraction": {
+      // Add fractions: a/b + c/d
+      const b1 = randInt(3, 10), d1 = randInt(3, 10);
+      const a1 = randInt(1, b1 - 1), c1 = randInt(1, d1 - 1);
+      const num = a1 * d1 + c1 * b1;
+      const den = b1 * d1;
+      const simplify = (n, d) => { const g = (x, y) => (y ? g(y, x % y) : x); const gg = g(n, d); return [n/gg, d/gg]; };
+      const [sn, sd] = simplify(num, den);
+      const text = `Add: ${a1}/${b1} + ${c1}/${d1} (simplest form)`;
+      const distractor = simplify(num + randInt(1,3), den);
+      const choices = shuffle([`${sn}/${sd}`, `${sn + 1}/${sd}`, `${sn}/${sd + 1}`, `${distractor[0]}/${distractor[1]}`]);
+      return { text, answer: `${sn}/${sd}`, choices, explain: `Common denom ${den}; sum ${num}/${den} = ${sn}/${sd}.` };
+    }
+    default:
+      return { text: "Compute: 12 × 7", answer: "84", choices: shuffle(["84","82","96","72"]), explain: "Multiplication." };
+  }
+}
+
+function generateQuiz(n = 5) {
+  const qs = [];
+  for (let i = 0; i < n; i++) qs.push(generateQuestion());
+  return qs;
+}
+
+const Section = ({ id, active, children }) => (
+  <AnimatePresence mode="wait">
+    {active && (
+      <motion.section
+        key={id}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -10 }}
+        transition={{ duration: 0.25 }}
+        className="max-w-5xl mx-auto p-4 md:p-8"
+      >
+        {children}
+      </motion.section>
+    )}
+  </AnimatePresence>
+);
+
+export default function MathGramApp() {
+  const [page, setPage] = useState("home"); // home | login | quiz | result | history | courses | about | contact
+  const [user, setUser] = useState(null);
+  const [quiz, setQuiz] = useState({ questions: [], answers: {}, started: false, timeLeft: 10, score: 0, submitted: false });
+  const timerRef = useRef(null);
+
+  const startQuiz = () => {
+    const questions = generateQuiz(5);
+    setQuiz({ questions, answers: {}, started: true, timeLeft: 10, score: 0, submitted: false });
+    setPage("quiz");
+  };
+
+  // Countdown: total timer 10 seconds for all 5 Qs, auto-submit at 0
+  useEffect(() => {
+    if (page !== "quiz") return;
+    if (!quiz.started || quiz.submitted) return;
+    if (quiz.timeLeft <= 0) {
+      handleSubmit();
+      return;
+    }
+    timerRef.current = setTimeout(() => setQuiz((q) => ({ ...q, timeLeft: q.timeLeft - 1 })), 1000);
+    return () => clearTimeout(timerRef.current);
+  }, [page, quiz.started, quiz.timeLeft, quiz.submitted]);
+
+  const setAnswer = (idx, val) => {
+    setQuiz((q) => ({ ...q, answers: { ...q.answers, [idx]: val } }));
+  };
+
+  const handleSubmit = () => {
+    let score = 0;
+    quiz.questions.forEach((q, i) => {
+      const a = (quiz.answers[i] ?? "").toString().trim();
+      if (a === q.answer) score++;
+    });
+    setQuiz((prev) => ({ ...prev, score, submitted: true }));
+    setPage("result");
+  };
+
+  const resetQuiz = () => {
+    setQuiz({ questions: [], answers: {}, started: false, timeLeft: 10, score: 0, submitted: false });
+  };
+
+  // Navigation helpers
+  const go = (p) => setPage(p);
+
+  // Header/Nav
+  const NavButton = ({ label, icon: Icon, to }) => (
+    <button
+      onClick={() => go(to)}
+      className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-100 transition ${page===to?"bg-neutral-100":""}`}
+    >
+      {Icon && <Icon size={16} />} {label}
+    </button>
+  );
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-neutral-50 to-neutral-100 text-neutral-900">
+      {/* Header */}
+      <header className="sticky top-0 z-20 backdrop-blur supports-[backdrop-filter]:bg-white/60 bg-white/80 border-b border-neutral-200">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-2xl bg-black text-white grid place-items-center font-bold">MG</div>
+            <span className="font-bold text-lg">Math Gram</span>
+          </div>
+          <nav className="flex items-center gap-1 text-sm">
+            <NavButton label="Home" icon={Home} to="home" />
+            <NavButton label="About" icon={Info} to="about" />
+            <NavButton label="Contact" icon={Phone} to="contact" />
+            {!user && <NavButton label="Login" icon={LogIn} to="login" />}
+            {user && (
+              <>
+                <NavButton label="Quiz" icon={Award} to="quiz" />
+                <NavButton label="Courses" icon={GraduationCap} to="courses" />
+              </>
+            )}
+          </nav>
+        </div>
+      </header>
+
+      {/* HOME */}
+      <Section id="home" active={page === "home"}>
+        <div className="grid md:grid-cols-2 gap-6 items-center">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold mb-3">Master Math the Smart Way.</h1>
+            <p className="text-neutral-700 mb-6">
+              Welcome to <strong>Math Gram</strong> — your pocket tutor. Try our quick demo video, then log in to take an AI‑generated medium‑level quiz.
+            </p>
+            {user ? (
+              <div className="flex gap-3">
+                <Button onClick={() => startQuiz()} className="bg-emerald-600">Start Quiz</Button>
+                <Button onClick={() => go("courses")} className="bg-neutral-900">Explore Courses</Button>
+              </div>
+            ) : (
+              <Button onClick={() => go("login")} className="bg-neutral-900 inline-flex items-center gap-2">
+                <Play size={16} /> Try Now
+              </Button>
+            )}
+          </div>
+          <Card className="">
+            <div className="aspect-video rounded-xl overflow-hidden bg-neutral-200 grid place-items-center">
+              {/* Trial Video Section (placeholder). Replace src with your hosted mp4 or YouTube embed below. */}
+              <video controls className="w-full h-full object-cover" poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1280' height='720'%3E%3Crect width='100%25' height='100%25' fill='%23f3f4f6'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' fill='%23999' font-size='28'%3EMath Gram Trial Video%3C/text%3E%3C/svg%3E">
+                <source src="" type="video/mp4" />
+                Your browser does not support the video tag.
+              </video>
+              {/* Or drop in a YouTube embed: */}
+              {/* <iframe className="w-full h-full" src="https://www.youtube.com/embed/VIDEO_ID" title="Trial Video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe> */}
+            </div>
+          </Card>
+        </div>
+      </Section>
+
+      {/* LOGIN */}
+      <Section id="login" active={page === "login"}>
+        <Card>
+          <h2 className="text-2xl font-bold mb-4">Login</h2>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const data = new FormData(e.currentTarget);
+              const name = data.get("name");
+              if (!name) return;
+              setUser({ name });
+              startQuiz();
+            }}
+            className="grid md:grid-cols-2 gap-4"
+          >
+            <Field label="Your Name">
+              <input name="name" className="w-full border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-black/20" placeholder="Jane Doe" />
+            </Field>
+            <Field label="Password (demo)">
+              <input type="password" className="w-full border rounded-xl px-3 py-2" placeholder="••••••" />
+            </Field>
+            <div className="md:col-span-2 flex items-center gap-3">
+              <Button type="submit" className="bg-neutral-900">Login & Start Quiz</Button>
+              <span className="text-sm text-neutral-500">(Demo only — not real authentication)</span>
+            </div>
+          </form>
+        </Card>
+      </Section>
+
+      {/* QUIZ */}
+      <Section id="quiz" active={page === "quiz"}>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <h2 className="text-2xl font-bold">Quiz: 5 Questions • Medium Level</h2>
+          <div className={`text-lg font-mono ${quiz.timeLeft <= 3 ? "text-red-600" : "text-neutral-900"}`}>
+            Time Left: <span className="font-bold">{Math.max(0, quiz.timeLeft)}s</span>
+          </div>
+        </div>
+        {quiz.questions.length === 0 && (
+          <Card className="mt-4">
+            <div className="flex items-center justify-between gap-3">
+              <p>No quiz yet.</p>
+              <Button onClick={startQuiz}>Generate Quiz</Button>
+            </div>
+          </Card>
+        )}
+        <div className="grid gap-4 mt-4">
+          {quiz.questions.map((q, i) => (
+            <Card key={i}>
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div className="font-medium">Q{i + 1}. {q.text}</div>
+                <div className="flex flex-wrap gap-2">
+                  {q.choices?.map((c, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setAnswer(i, c)}
+                      className={`px-3 py-2 rounded-xl border transition ${quiz.answers[i]===c?"bg-black text-white border-black":"hover:bg-neutral-100"}`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <details className="mt-2 text-sm text-neutral-600">
+                <summary className="cursor-pointer select-none">Hint / Explanation</summary>
+                <div className="mt-2">{q.explain}</div>
+              </details>
+            </Card>
+          ))}
+        </div>
+        <div className="flex items-center gap-3 mt-4">
+          <Button onClick={handleSubmit} className="bg-emerald-600">Submit</Button>
+          <Button onClick={startQuiz} className="bg-neutral-800">Regenerate</Button>
+          <Button onClick={resetQuiz} className="bg-neutral-500">Reset</Button>
+        </div>
+        <p className="text-xs text-neutral-500 mt-2">Note: The total timer is 10 seconds for all questions. Submits automatically when it reaches 0.</p>
+      </Section>
+
+      {/* RESULT */}
+      <Section id="result" active={page === "result"}>
+        <Card>
+          <h2 className="text-2xl font-bold">Your Result</h2>
+          <p className="mt-2">{user ? <><span className="font-semibold">{user.name}</span>,</> : null} you scored <span className="font-semibold">{quiz.score}</span> / {quiz.questions.length}.</p>
+          <div className="mt-4 grid gap-3">
+            {quiz.questions.map((q, i) => {
+              const your = (quiz.answers[i] ?? "").toString();
+              const correct = q.answer.toString();
+              const ok = your === correct;
+              return (
+                <div key={i} className={`p-3 rounded-xl border ${ok?"border-emerald-300 bg-emerald-50":"border-rose-300 bg-rose-50"}`}>
+                  <div className="font-medium">Q{i + 1}. {q.text}</div>
+                  <div className="text-sm">Your answer: <span className="font-mono">{your || "(blank)"}</span> • Correct: <span className="font-mono">{correct}</span></div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-3 mt-5">
+            <Button onClick={() => go("history")} className="bg-neutral-900">Next: Vedic Math History</Button>
+            <Button onClick={startQuiz} className="bg-neutral-700">Retry Quiz</Button>
+          </div>
+        </Card>
+      </Section>
+
+      {/* HISTORY: Vedic Math */}
+      <Section id="history" active={page === "history"}>
+        <Card>
+          <h2 className="text-3xl font-extrabold mb-3">A Short History of Vedic Mathematics</h2>
+          <div className="prose max-w-none">
+            <p>
+              Vedic Mathematics refers to a system of mental calculation techniques popularized in the early 20th century, notably through the work attributed to <em>Jagadguru Shri Bharati Krishna Tirthaji</em>. The methods are organized around succinct aphorisms or <em>sūtras</em> that guide rapid arithmetic, factorization, squaring, and algebraic manipulation.
+            </p>
+            <p>
+              While the historical origins and the extent of ancient roots are debated, the techniques themselves are widely taught today for their speed and intuition. Learners appreciate shortcuts such as <em>Nikhilam</em> (base methods), <em>Urdhva–Tiryagbhyam</em> (vertical & crosswise multiplication), and quick squaring or division tricks. These approaches cultivate number sense and alternative ways to check work, complementing standard school methods.
+            </p>
+            <p>
+              In competitive settings and mental‑math practice, Vedic strategies can significantly reduce steps and cognitive load, making them ideal for timed quizzes and mental agility training.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 mt-5">
+            <Button onClick={() => go("courses")} className="bg-emerald-600">Go to Courses & Module</Button>
+            <Button onClick={() => go("home")} className="bg-neutral-800">Back to Home</Button>
+          </div>
+        </Card>
+      </Section>
+
+      {/* COURSES & MODULES */}
+      <Section id="courses" active={page === "courses"}>
+        <h2 className="text-3xl font-extrabold mb-3">Courses & Modules</h2>
+        <div className="grid md:grid-cols-3 gap-4">
+          <Card>
+            <h3 className="text-lg font-bold">Vedic Math Foundations</h3>
+            <p className="text-sm text-neutral-600 mt-1">Speed arithmetic, mental addition, base methods.</p>
+            <div className="mt-3 flex items-center justify-between">
+              <span className="font-semibold">₹799</span>
+              <Button className="bg-black">Buy Course</Button>
+            </div>
+            <div className="mt-3">
+              <div className="text-sm font-semibold mb-1">Module Preview</div>
+              <ul className="text-sm list-disc ml-5 space-y-1">
+                <li>Module 1: </li>
+                <li>Module 2: </li>
+                <li>Module 3: </li>
+              </ul>
+            </div>
+          </Card>
+          <Card>
+            <h3 className="text-lg font-bold"></h3>
+            <p className="text-sm text-neutral-600 mt-1"></p>
+            <div className="mt-3 flex items-center justify-between">
+              <span className="font-semibold">₹999</span>
+              <Button className="bg-black">Buy Course</Button>
+            </div>
+            <div className="mt-3">
+              <div className="text-sm font-semibold mb-1">Module Preview</div>
+              <ul className="text-sm list-disc ml-5 space-y-1">
+                <li>Module 1:</li>
+                <li>Module 2: </li>
+                <li>Module 3: </li>
+              </ul>
+            </div>
+          </Card>
+          <Card>
+            <h3 className="text-lg font-bold">Contest Math Drills</h3>
+            <p className="text-sm text-neutral-600 mt-1">Mixed‑topic speed drills with analytics.</p>
+            <div className="mt-3 flex items-center justify-between">
+              <span className="font-semibold">₹1,299</span>
+              <Button className="bg-black">Buy Course</Button>
+            </div>
+            <div className="mt-3">
+              <div className="text-sm font-semibold mb-1">Module Preview</div>
+              <ul className="text-sm list-disc ml-5 space-y-1">
+                <li>Module 1: Time‑boxed Sets</li>
+                <li>Module 2: Error Patterns</li>
+                <li>Module 3: Leaderboards</li>
+              </ul>
+            </div>
+          </Card>
+        </div>
+      </Section>
+
+      {/* ABOUT */}
+      <Section id="about" active={page === "about"}>
+        <Card>
+          <h2 className="text-2xl font-bold mb-2">About Math Gram</h2>
+          <p>
+            Math Gram is a lightweight learning experience focused on speed, intuition, and mastery. Our quizzes are generated on the fly to keep practice fresh and level‑appropriate.
+          </p>
+        </Card>
+      </Section>
+
+      {/* CONTACT */}
+      <Section id="contact" active={page === "contact"}>
+        <Card>
+          <h2 className="text-2xl font-bold mb-4">Contact</h2>
+          <form
+            onSubmit={(e) => { e.preventDefault(); alert("Thanks! We'll get back to you soon."); }}
+            className="grid md:grid-cols-2 gap-4"
+          >
+            <Field label="Name">
+              <input className="w-full border rounded-xl px-3 py-2" placeholder="Your name" />
+            </Field>
+            <Field label="Email">
+              <input className="w-full border rounded-xl px-3 py-2" placeholder="you@example.com" />
+            </Field>
+            <Field label="Message">
+              <textarea className="w-full border rounded-xl px-3 py-2 h-28 md:col-span-2" placeholder="How can we help?" />
+            </Field>
+            <div className="md:col-span-2">
+              <Button type="submit" className="bg-neutral-900">Send</Button>
+            </div>
+          </form>
+        </Card>
+      </Section>
+
+      {/* Footer */}
+      <footer className="mt-12 py-8 text-center text-sm text-neutral-500">
+        © {new Date().getFullYear()} Math Gram • Built as a demo single‑page app
+      </footer>
+    </div>
+  );
+}
